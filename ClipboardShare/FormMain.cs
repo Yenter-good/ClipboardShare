@@ -37,7 +37,7 @@ namespace ClipboardShare
             if (!keys.Contains("ServerIP") || !keys.Contains("ServerPort"))
             {
                 MessageBox.Show("配置文件缺少服务器节点");
-                this.Close();
+                Environment.Exit(0);
             }
 
             _serverIP = ConfigurationManager.AppSettings["ServerIP"].ToString();
@@ -45,7 +45,7 @@ namespace ClipboardShare
             if (!valid)
             {
                 MessageBox.Show("服务器端口必须为数字");
-                this.Close();
+                Environment.Exit(0);
             }
 
         }
@@ -65,7 +65,7 @@ namespace ClipboardShare
             catch (Exception ex)
             {
                 MessageBox.Show(ex.Message);
-                this.Close();
+                Environment.Exit(0);
             }
         }
 
