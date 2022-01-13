@@ -31,7 +31,7 @@
             this.components = new System.ComponentModel.Container();
             System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(FormMain));
             this.btnMonitor = new System.Windows.Forms.Button();
-            this.checkBox1 = new System.Windows.Forms.CheckBox();
+            this.cbxWithoutSync = new System.Windows.Forms.CheckBox();
             this.labState = new System.Windows.Forms.Label();
             this.tbxGroupId = new System.Windows.Forms.TextBox();
             this.label1 = new System.Windows.Forms.Label();
@@ -51,15 +51,15 @@
             this.btnMonitor.UseVisualStyleBackColor = true;
             this.btnMonitor.Click += new System.EventHandler(this.btnMonitor_Click);
             // 
-            // checkBox1
+            // cbxWithoutSync
             // 
-            this.checkBox1.AutoSize = true;
-            this.checkBox1.Location = new System.Drawing.Point(108, 83);
-            this.checkBox1.Name = "checkBox1";
-            this.checkBox1.Size = new System.Drawing.Size(149, 19);
-            this.checkBox1.TabIndex = 1;
-            this.checkBox1.Text = "本机不同步剪贴板";
-            this.checkBox1.UseVisualStyleBackColor = true;
+            this.cbxWithoutSync.AutoSize = true;
+            this.cbxWithoutSync.Location = new System.Drawing.Point(108, 83);
+            this.cbxWithoutSync.Name = "cbxWithoutSync";
+            this.cbxWithoutSync.Size = new System.Drawing.Size(149, 19);
+            this.cbxWithoutSync.TabIndex = 1;
+            this.cbxWithoutSync.Text = "本机不同步剪贴板";
+            this.cbxWithoutSync.UseVisualStyleBackColor = true;
             // 
             // labState
             // 
@@ -116,7 +116,7 @@
             this.Controls.Add(this.label1);
             this.Controls.Add(this.tbxGroupId);
             this.Controls.Add(this.labState);
-            this.Controls.Add(this.checkBox1);
+            this.Controls.Add(this.cbxWithoutSync);
             this.Controls.Add(this.btnMonitor);
             this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -134,7 +134,7 @@
         #endregion
 
         private System.Windows.Forms.Button btnMonitor;
-        private System.Windows.Forms.CheckBox checkBox1;
+        private System.Windows.Forms.CheckBox cbxWithoutSync;
         private System.Windows.Forms.Label labState;
         private System.Windows.Forms.TextBox tbxGroupId;
         private System.Windows.Forms.Label label1;

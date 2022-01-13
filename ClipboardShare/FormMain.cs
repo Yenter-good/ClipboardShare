@@ -148,6 +148,8 @@ namespace ClipboardShare
 
         private void monitor_ClipboardNotify(object sender, ClipboardNotifyEventArgs e)
         {
+            if (this.cbxWithoutSync.Checked)
+                return;
             _sm.Send(new TransferStructure() { TransferProtocol = TransferProtocol.SyncClipboard, Data = e.Datas });
         }
 
