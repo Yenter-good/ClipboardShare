@@ -409,7 +409,7 @@ namespace Server
         public int SendMessage(string groupId, string userId, TransferStructure data)
         {
             var buffer = data.BeginSerializable();
-            var tokens = m_clients.Where(p => p.GroupId == groupId && p.UserId != userId);
+            var tokens = m_clients.Where(p => p.GroupId == groupId );
             foreach (var token in tokens)
             {
                 this.SendMessage(token, buffer);

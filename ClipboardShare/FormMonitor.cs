@@ -45,11 +45,10 @@ namespace ClipboardShare
                 if (Environment.TickCount - this.lastTickCount >= 200)
                 {
                     var obj = Clipboard.GetDataObject();
-                    if (obj.GetDataPresent(DataFormats.FileDrop) || obj.GetDataPresent(DataFormats.Bitmap))
-                        return;
                     var types = obj.GetFormats();
                     foreach (var type in types)
                     {
+
                         var tmp = _lastClipboardDatas.Find(p => p.Type == type);
                         if (tmp == null || !ClipboardData.Equals(tmp.Data, obj.GetData(type)))
                         {
@@ -69,7 +68,11 @@ namespace ClipboardShare
         {
             _lastClipboardDatas = new List<ClipboardData>();
             foreach (var type in types)
+            {
+                if (type.Contains("File"))
+                    continue;
                 _lastClipboardDatas.Add(new ClipboardData() { Type = type, Data = obj.GetData(type) });
+            }
         }
     }
 
