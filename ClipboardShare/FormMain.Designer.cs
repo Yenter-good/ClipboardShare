@@ -113,7 +113,7 @@
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(120F, 120F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Dpi;
-            this.ClientSize = new System.Drawing.Size(268, 115);
+            this.ClientSize = new System.Drawing.Size(268, 118);
             this.Controls.Add(this.label1);
             this.Controls.Add(this.tbxGroupId);
             this.Controls.Add(this.labState);

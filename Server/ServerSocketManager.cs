@@ -279,8 +279,8 @@ namespace Server
                         var tokens = m_clients[currentToken.GroupId];
                         foreach (var token in tokens)
                         {
-                            //if (token == currentToken)
-                            //    continue;
+                            if (token == currentToken)
+                                continue;
                             this.SendMessageWithoutHead(token, e.Buffer, e.Offset, e.BytesTransferred);
                         }
 

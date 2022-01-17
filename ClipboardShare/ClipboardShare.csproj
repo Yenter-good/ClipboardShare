@@ -92,6 +92,10 @@
       <Project>{e7698fca-7606-4474-894e-6cda4eb80327}</Project>
       <Name>Client</Name>
     </ProjectReference>
+    <ProjectReference Include="..\Server\Server.csproj">
+      <Project>{5b9706fc-cb91-48c6-877f-e364eb44c41d}</Project>
+      <Name>Server</Name>
+    </ProjectReference>
     <ProjectReference Include="..\SocketCommon\SocketCommon.csproj">
       <Project>{82DF67A5-1BB9-4168-BDEB-B94ADC1A0049}</Project>
       <Name>SocketCommon</Name>

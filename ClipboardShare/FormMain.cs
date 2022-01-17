@@ -1,4 +1,5 @@
 ﻿using Client;
+using Server;
 using SocketCommon;
 using System;
 using System.Collections.Generic;
@@ -7,6 +8,7 @@ using System.Configuration;
 using System.Data;
 using System.Drawing;
 using System.Linq;
+using System.Net;
 using System.Text;
 using System.Windows.Forms;
 
@@ -16,9 +18,12 @@ namespace ClipboardShare
     {
         private FormMonitor _monitor;
         private ClientSocketManager _sm;
+        private ServerSocketManager _serverSM;
 
         private string _serverIP = "";
         private int _serverPort = 0;
+
+        private bool _selfServer;
 
         private bool _isStart = false;
 
@@ -39,6 +44,9 @@ namespace ClipboardShare
                 Environment.Exit(0);
             }
 
+            if (keys.Contains("SelfServer"))
+                _selfServer = ConfigurationManager.AppSettings["SelfServer"].ToString().ToLower() == "true";
+
             _serverIP = ConfigurationManager.AppSettings["ServerIP"].ToString();
             var valid = int.TryParse(ConfigurationManager.AppSettings["ServerPort"].ToString(), out _serverPort);
             if (!valid)
@@ -47,6 +55,12 @@ namespace ClipboardShare
                 Environment.Exit(0);
             }
 
+            if (_selfServer)
+            {
+                _serverSM = new ServerSocketManager(100, 2048);
+                _serverSM.Init();
+                _serverSM.Start(new IPEndPoint(IPAddress.Any, _serverPort));
+            }
         }
 
         private void Connect()
