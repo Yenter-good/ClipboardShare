@@ -9,9 +9,9 @@ using System.Threading;
 
 namespace Client
 {
-    public class SocketManager : IDisposable
+    public class ClientSocketManager : IDisposable
     {
-        private const int BuffSize = 1024;
+        private const int BuffSize = 2048;
 
         /// <summary>
         /// 用于发送/接收消息的套接字。
@@ -30,10 +30,13 @@ namespace Client
         BufferManager m_bufferManager;
         //定义接收数据的对象
         List<byte> m_buffer;
-        //发送与接收的MySocketEventArgs变量定义.
-        private List<MySocketAsyncEventArgs> listArgs = new List<MySocketAsyncEventArgs>();
-        private MySocketAsyncEventArgs receiveEventArgs = new MySocketAsyncEventArgs();
-        int tagCount = 0;
+        private SocketAsyncEventArgs receiveEventArgs;
+        private SocketEventPool _socketPool;
+
+        private string _groupId;
+
+        private byte[] _receive_cache;
+        private int _receive_offset;
 
         /// <summary>
         /// 当前连接状态
@@ -41,7 +44,7 @@ namespace Client
         public bool Connected { get { return clientSocket != null && clientSocket.Connected; } }
 
         //服务器主动发出数据受理委托及事件
-        public delegate void OnServerDataReceived(byte[] receiveBuff);
+        public delegate void OnServerDataReceived(TransferStructure stru);
         public event OnServerDataReceived ServerDataHandler;
 
         //服务器主动关闭连接委托及事件
@@ -53,37 +56,41 @@ namespace Client
         /// </summary>
         /// <param name="ip"></param>
         /// <param name="port"></param>
-        public SocketManager(string ip, int port)
+        public ClientSocketManager(string ip, int port)
         {
             // 实例化端点和套接字。
             hostEndPoint = new IPEndPoint(IPAddress.Parse(ip), port);
             clientSocket = new Socket(hostEndPoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
             m_bufferManager = new BufferManager(BuffSize * 2, BuffSize);
             m_buffer = new List<byte>();
+
+            _socketPool = new SocketEventPool(10, true);
+            receiveEventArgs = _socketPool.Pop();
         }
 
         /// <summary>
         /// 连接到主机
         /// </summary>
         /// <returns>0.连接成功, 其他值失败,参考SocketError的值列表</returns>
-        public SocketError Connect(string groupId, string userId)
+        public SocketError Connect(string groupId)
         {
-            SocketAsyncEventArgs connectArgs = new SocketAsyncEventArgs();
+            _groupId = groupId;
+            SocketAsyncEventArgs connectArgs = _socketPool.Pop();
 
             connectArgs.RemoteEndPoint = hostEndPoint;
             connectArgs.Completed += new EventHandler<SocketAsyncEventArgs>(OnConnect);
 
             clientSocket.ConnectAsync(connectArgs);
             autoConnectEvent.WaitOne(); //阻塞. 让程序在这里等待,直到连接响应后再返回连接结果
-            if (connectArgs.SocketError == SocketError.Success)
-                this.Send(new TransferStructure() { TransferProtocol = TransferProtocol.GroupId, Data = new string[] { groupId, userId } });
             return connectArgs.SocketError;
         }
 
         public void Disconnect()
         {
             if (clientSocket.Connected)
+            {
                 clientSocket.Disconnect(false);
+            }
         }
 
         /// <summary>
@@ -99,7 +106,10 @@ namespace Client
             connected = (e.SocketError == SocketError.Success);
             //如果连接成功,则初始化socketAsyncEventArgs
             if (connected)
+            {
                 initArgs(e);
+                this.Send(new TransferStructure() { TransferProtocol = TransferProtocol.GroupId, Data = _groupId });
+            }
         }
 
 
@@ -112,12 +122,9 @@ namespace Client
         private void initArgs(SocketAsyncEventArgs e)
         {
             m_bufferManager.InitBuffer();
-            //发送参数
-            initSendArgs();
             //接收参数
             receiveEventArgs.Completed += new EventHandler<SocketAsyncEventArgs>(IO_Completed);
             receiveEventArgs.UserToken = clientSocket;
-            receiveEventArgs.ArgsTag = 0;
             m_bufferManager.SetBuffer(receiveEventArgs);
 
             //启动接收,不管有没有,一定得启动.否则有数据来了也不知道.
@@ -125,31 +132,8 @@ namespace Client
                 ProcessReceive(receiveEventArgs);
         }
 
-        /// <summary>
-        /// 初始化发送参数MySocketEventArgs
-        /// </summary>
-        /// <returns></returns>
-        MySocketAsyncEventArgs initSendArgs()
-        {
-            MySocketAsyncEventArgs sendArg = new MySocketAsyncEventArgs();
-            sendArg.Completed += new EventHandler<SocketAsyncEventArgs>(IO_Completed);
-            sendArg.UserToken = clientSocket;
-            sendArg.RemoteEndPoint = hostEndPoint;
-            sendArg.IsUsing = false;
-            Interlocked.Increment(ref tagCount);
-            sendArg.ArgsTag = tagCount;
-            lock (listArgs)
-            {
-                listArgs.Add(sendArg);
-            }
-            return sendArg;
-        }
-
-
-
         void IO_Completed(object sender, SocketAsyncEventArgs e)
         {
-            MySocketAsyncEventArgs mys = (MySocketAsyncEventArgs)e;
             // 确定刚刚完成的操作类型并调用关联的处理程序
             switch (e.LastOperation)
             {
@@ -157,7 +141,6 @@ namespace Client
                     ProcessReceive(e);
                     break;
                 case SocketAsyncOperation.Send:
-                    mys.IsUsing = false; //数据发送已完成.状态设为False
                     ProcessSend(e);
                     break;
                 default:
@@ -183,34 +166,37 @@ namespace Client
                     //读取数据
                     byte[] data = new byte[e.BytesTransferred];
                     Array.Copy(e.Buffer, e.Offset, data, 0, e.BytesTransferred);
-                    lock (m_buffer)
+                    if (_receive_cache == null)
                     {
-                        m_buffer.AddRange(data);
+                        byte[] lenBytes = new byte[4];
+                        Array.Copy(data, 0, lenBytes, 0, 4);
+                        int packageLen = BitConverter.ToInt32(lenBytes, 0);
+                        _receive_cache = new byte[packageLen];
+                        _receive_offset = 0;
+                        Array.Copy(data, 4, _receive_cache, _receive_offset, e.BytesTransferred - 4);
+                        _receive_offset += e.BytesTransferred - 4;
+                    }
+                    else
+                    {
+                        Array.Copy(data, 0, _receive_cache, _receive_offset, e.BytesTransferred);
+                        _receive_offset += e.BytesTransferred;
+                    }
+                    data = null;
+
+                    //注意: 这里是需要和服务器有协议的,我做了个简单的协议,就是一个完整的包是包长(4字节)+包数据,便于处理,当然你可以定义自己需要的; 
+                    //判断包的长度,前面4个字节.
+
+                    if (_receive_offset >= _receive_cache.Length)
+                    {
+                        ThreadPool.QueueUserWorkItem(p =>
+                        {
+                            var transfer = _receive_cache.BeginDeserialize<TransferStructure>();
+                            _receive_cache = null;
+                            ServerDataHandler?.BeginInvoke(transfer, null, null);
+                            GC.Collect();
+                        });
                     }
 
-                    do
-                    {
-                        //注意: 这里是需要和服务器有协议的,我做了个简单的协议,就是一个完整的包是包长(4字节)+包数据,便于处理,当然你可以定义自己需要的; 
-                        //判断包的长度,前面4个字节.
-                        byte[] lenBytes = m_buffer.GetRange(0, 4).ToArray();
-                        int packageLen = BitConverter.ToInt32(lenBytes, 0);
-                        if (packageLen <= m_buffer.Count - 4)
-                        {
-                            //包够长时,则提取出来,交给后面的程序去处理
-                            byte[] rev = m_buffer.GetRange(4, packageLen).ToArray();
-                            //从数据池中移除这组数据,为什么要lock,你懂的
-                            lock (m_buffer)
-                            {
-                                m_buffer.RemoveRange(0, packageLen + 4);
-                            }
-                            //将数据包交给前台去处理
-                            DoReceiveEvent(rev);
-                        }
-                        else
-                        {   //长度不够,还得继续接收,需要跳出循环
-                            break;
-                        }
-                    } while (m_buffer.Count > 4);
                     //注意:你一定会问,这里为什么要用do-while循环?   
                     //如果当服务端发送大数据流的时候,e.BytesTransferred的大小就会比服务端发送过来的完整包要小,  
                     //需要分多次接收.所以收到包的时候,先判断包头的大小.够一个完整的包再处理.  
@@ -281,8 +267,6 @@ namespace Client
                 }
             }
             //这里一定要记得把事件移走,如果不移走,当断开服务器后再次连接上,会造成多次事件触发.
-            foreach (MySocketAsyncEventArgs arg in listArgs)
-                arg.Completed -= IO_Completed;
             receiveEventArgs.Completed -= IO_Completed;
 
             if (ServerStopEvent != null)
@@ -301,22 +285,28 @@ namespace Client
                 byte[] buff = new byte[sendBuffer.Length + 4];
                 Array.Copy(BitConverter.GetBytes(sendBuffer.Length), buff, 4);
                 Array.Copy(sendBuffer, 0, buff, 4, sendBuffer.Length);
+                sendBuffer = null;
                 //查找有没有空闲的发送MySocketEventArgs,有就直接拿来用,没有就创建新的.So easy!
-                MySocketAsyncEventArgs sendArgs = listArgs.Find(a => a.IsUsing == false);
-                if (sendArgs == null)
-                {
-                    sendArgs = initSendArgs();
-                }
-                lock (sendArgs) //要锁定,不锁定让别的线程抢走了就不妙了.
-                {
-                    sendArgs.IsUsing = true;
-                    sendArgs.SetBuffer(buff, 0, buff.Length);
-                }
+                SocketAsyncEventArgs sendArgs = _socketPool.Pop();
+                sendArgs.Completed += SendArgs_Completed;
+                sendArgs.SetBuffer(buff, 0, buff.Length);
                 clientSocket.SendAsync(sendArgs);
+                buff = null;
+                GC.Collect();
             }
             else
             {
                 throw new SocketException((Int32)SocketError.NotConnected);
+            }
+        }
+
+        private void SendArgs_Completed(object sender, SocketAsyncEventArgs e)
+        {
+            if (e.LastOperation == SocketAsyncOperation.Send)
+            {
+                e.SetBuffer(null, 0, 0);
+                e.Completed -= SendArgs_Completed;
+                _socketPool.Push(e);
             }
         }
 
@@ -325,23 +315,6 @@ namespace Client
             var buffer = data.BeginSerializable();
 
             this.Send(buffer);
-        }
-
-        /// <summary>
-        /// 使用新进程通知事件回调
-        /// </summary>
-        /// <param name="buff"></param>
-        private void DoReceiveEvent(byte[] buff)
-        {
-            if (ServerDataHandler == null) return;
-            //ServerDataHandler(buff); //可直接调用.
-            //但我更喜欢用新的线程,这样不拖延接收新数据.
-            Thread thread = new Thread(new ParameterizedThreadStart((obj) =>
-            {
-                ServerDataHandler((byte[])obj);
-            }));
-            thread.IsBackground = true;
-            thread.Start(buff);
         }
 
         #endregion

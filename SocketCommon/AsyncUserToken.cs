@@ -32,12 +32,11 @@ namespace SocketCommon
         /// <summary>  
         /// 数据缓存区  
         /// </summary>  
-        public List<byte> Buffer { get; set; }
-
+        public byte[] Buffer { get; set; }
         /// <summary>
-        /// 已经开始接受数据
+        /// 拷贝索引
         /// </summary>
-        public bool BeginAccept { get; set; }
+        public int CopyOffset { get; set; }
 
         /// <summary>
         /// 当前会话包总长度
@@ -48,14 +47,6 @@ namespace SocketCommon
         /// 组id
         /// </summary>
         public string GroupId { get; set; }
-        /// <summary>
-        /// 用户id
-        /// </summary>
-        public string UserId { get; set; }
 
-        public AsyncUserToken()
-        {
-            this.Buffer = new List<byte>();
-        }
     }
 }

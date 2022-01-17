@@ -10,7 +10,7 @@ namespace ClipboardShareServer
 {
     internal class Program
     {
-        private static SocketManager _sm;
+        private static ServerSocketManager _sm;
 
         static void Main(string[] args)
         {
@@ -23,7 +23,7 @@ namespace ClipboardShareServer
 
         private static void InitServer()
         {
-            _sm = new SocketManager(100, 2048);
+            _sm = new ServerSocketManager(100, 2048);
             _sm.Init();
             _sm.ReceiveClientData += sm_ReceiveClientData;
             _sm.Start(new IPEndPoint(IPAddress.Any, 9999));
@@ -31,9 +31,9 @@ namespace ClipboardShareServer
 
         private static void sm_ReceiveClientData(string groupId, string userId, TransferStructure recv)
         {
-            var count = _sm.SendMessage(groupId, userId, recv);
-            if (count != 0)
-                Console.WriteLine($"{DateTime.Now}:组<{groupId}>正在转发到{count}个客户端");
+            //var count = _sm.SendMessage(groupId, userId, recv);
+            //if (count != 0)
+            //    Console.WriteLine($"{DateTime.Now}:组<{groupId}>正在转发到{count}个客户端");
         }
     }
 }

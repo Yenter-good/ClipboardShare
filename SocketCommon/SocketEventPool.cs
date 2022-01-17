@@ -1,19 +1,25 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Sockets;
 using System.Text;
 
-namespace Server
+namespace SocketCommon
 {
-    class SocketEventPool
+    public class SocketEventPool
     {
-        Stack<SocketAsyncEventArgs> m_pool;
+        ConcurrentStack<SocketAsyncEventArgs> m_pool;
 
 
-        public SocketEventPool(int capacity)
+        public SocketEventPool(int capacity, bool init)
         {
-            m_pool = new Stack<SocketAsyncEventArgs>(capacity);
+            m_pool = new ConcurrentStack<SocketAsyncEventArgs>();
+            if (init)
+            {
+                for (int i = 0; i < capacity; i++)
+                    m_pool.Push(new SocketAsyncEventArgs());
+            }
         }
 
         public void Push(SocketAsyncEventArgs item)
@@ -33,7 +39,11 @@ namespace Server
         {
             lock (m_pool)
             {
-                return m_pool.Pop();
+                var success = m_pool.TryPop(out var args);
+                if (success)
+                    return args;
+                else
+                    return new SocketAsyncEventArgs();
             }
         }
 

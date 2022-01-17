@@ -15,15 +15,14 @@ namespace ClipboardShare
     public partial class FormMain : Form
     {
         private FormMonitor _monitor;
-        private SocketManager _sm;
+        private ClientSocketManager _sm;
 
-        private string _serverIP = "121.41.207.74";
-        private int _serverPort = 9999;
+        private string _serverIP = "";
+        private int _serverPort = 0;
 
         private bool _isStart = false;
 
-        private string _userId;
-
+        private TransferStructure _currentTransfer;
         public FormMain()
         {
             InitializeComponent();
@@ -54,9 +53,8 @@ namespace ClipboardShare
         {
             try
             {
-                _userId = Guid.NewGuid().ToString();
-                _sm = new SocketManager(_serverIP, _serverPort);
-                var error = _sm.Connect(this.tbxGroupId.Text, _userId);
+                _sm = new ClientSocketManager(_serverIP, _serverPort);
+                var error = _sm.Connect(this.tbxGroupId.Text);
                 if (error != System.Net.Sockets.SocketError.Success)
                     throw new Exception("服务器连接失败");
                 _sm.ServerDataHandler += sm_ServerDataHandler;
@@ -114,20 +112,20 @@ namespace ClipboardShare
 
             this.BeginInvoke((MethodInvoker)delegate
             {
+                _monitor.Pause = true;
                 Clipboard.SetDataObject(data, false);
                 Application.DoEvents();
+                _monitor.Pause = false;
             });
         }
         private void sm_ServerStopEvent()
         {
             MessageBox.Show("服务器已退出");
-            this.Disconnect();
-            this.StopMonitor();
+            Environment.Exit(0);
         }
-        private void sm_ServerDataHandler(byte[] receiveBuff)
+        private void sm_ServerDataHandler(TransferStructure stru)
         {
-            var data = receiveBuff.BeginDeserialize<TransferStructure>();
-            SetDataToClipboard(data.Data as List<ClipboardData>);
+            SetDataToClipboard(stru.Data as List<ClipboardData>);
         }
 
         private void btnMonitor_Click(object sender, EventArgs e)
@@ -150,7 +148,10 @@ namespace ClipboardShare
         {
             if (this.cbxWithoutSync.Checked)
                 return;
-            _sm.Send(new TransferStructure() { TransferProtocol = TransferProtocol.SyncClipboard, Data = e.Datas });
+
+            _currentTransfer = null;
+            _currentTransfer = new TransferStructure() { TransferProtocol = TransferProtocol.SyncClipboard, Data = e.Datas };
+            _sm.Send(_currentTransfer);
         }
 
         private void FormMain_FormClosing(object sender, FormClosingEventArgs e)
@@ -165,7 +166,6 @@ namespace ClipboardShare
         private void notifyIcon1_MouseDoubleClick(object sender, MouseEventArgs e)
         {
             this.Show();
-            this.notifyIcon1.Visible = false;
         }
 
         private void menuExit_Click(object sender, EventArgs e)

@@ -9,7 +9,7 @@ using System.Threading;
 
 namespace Server
 {
-    public class SocketManager
+    public class ServerSocketManager
     {
         private int m_maxConnectNum;    //最大连接数  
         private int m_revBufferSize;    //最大接收字节数  
@@ -20,7 +20,8 @@ namespace Server
         int m_clientCount;              //连接的客户端数量  
         Semaphore m_maxNumberAcceptedClients;
 
-        List<AsyncUserToken> m_clients; //客户端列表  
+        Dictionary<string, List<AsyncUserToken>> m_clients; //客户端列表  
+        byte[] lenBytes = new byte[4];
 
         #region 定义委托  
 
@@ -74,21 +75,12 @@ namespace Server
         public event OnRecieveProcess RecieveProcess;
         #endregion
 
-        #region 定义属性  
-
-        /// <summary>  
-        /// 获取客户端列表  
-        /// </summary>  
-        public List<AsyncUserToken> ClientList { get { return m_clients; } }
-
-        #endregion
-
         /// <summary>  
         /// 构造函数  
         /// </summary>  
         /// <param name="numConnections">最大连接数</param>  
         /// <param name="receiveBufferSize">缓存区大小</param>  
-        public SocketManager(int numConnections, int receiveBufferSize)
+        public ServerSocketManager(int numConnections, int receiveBufferSize)
         {
             m_clientCount = 0;
             m_maxConnectNum = numConnections;
@@ -96,7 +88,7 @@ namespace Server
             // 分配缓冲区，以便最大数量的套接字可以同时向套接字发送一个未完成的读和写
             m_bufferManager = new BufferManager(receiveBufferSize * numConnections * opsToAlloc, receiveBufferSize);
 
-            m_pool = new SocketEventPool(numConnections);
+            m_pool = new SocketEventPool(20, false);
             m_maxNumberAcceptedClients = new Semaphore(numConnections, numConnections);
         }
 
@@ -107,19 +99,13 @@ namespace Server
         {
             // 分配一个大字节缓冲区，所有I/O操作都使用它。这有助于防止内存碎片
             m_bufferManager.InitBuffer();
-            m_clients = new List<AsyncUserToken>();
+            m_clients = new Dictionary<string, List<AsyncUserToken>>();
             // 预分配SocketAsyncEventArgs对象池
-            SocketAsyncEventArgs readWriteEventArg;
 
             for (int i = 0; i < m_maxConnectNum; i++)
             {
-                readWriteEventArg = new SocketAsyncEventArgs();
-                readWriteEventArg.Completed += new EventHandler<SocketAsyncEventArgs>(IO_Completed);
-                readWriteEventArg.UserToken = new AsyncUserToken();
-
-                // 将缓冲池中的字节缓冲区分配给SocketAsyncEventArg对象
+                var readWriteEventArg = new SocketAsyncEventArgs();
                 m_bufferManager.SetBuffer(readWriteEventArg);
-                // 将SocketAsyncEventArg添加到池中
                 m_pool.Push(readWriteEventArg);
             }
         }
@@ -133,7 +119,7 @@ namespace Server
         {
             try
             {
-                m_clients = new List<AsyncUserToken>();
+                m_clients = new Dictionary<string, List<AsyncUserToken>>();
                 listenSocket = new Socket(localEndPoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
                 listenSocket.Bind(localEndPoint);
                 // listen启动服务器
@@ -153,11 +139,12 @@ namespace Server
         /// </summary>  
         public void Stop()
         {
-            foreach (AsyncUserToken token in m_clients)
+            foreach (var item in m_clients)
             {
                 try
                 {
-                    this.CloseClient(token);
+                    foreach (var token in item.Value)
+                        this.CloseClient(token);
                 }
                 catch (Exception) { }
             }
@@ -168,7 +155,6 @@ namespace Server
             catch (Exception) { }
 
             listenSocket.Close();
-            int c_count = m_clients.Count;
             lock (m_clients) { m_clients.Clear(); }
         }
 
@@ -179,7 +165,11 @@ namespace Server
             {
                 token.Socket.Shutdown(SocketShutdown.Both);
             }
-            catch (Exception) { }
+            catch { }
+            finally
+            {
+                m_clients[token.GroupId].Remove(token);
+            }
         }
 
 
@@ -224,6 +214,8 @@ namespace Server
                 Interlocked.Increment(ref m_clientCount);
                 // 获取接受的客户端连接的套接字，并将其放入ReadEventArg对象用户令牌中
                 SocketAsyncEventArgs readEventArgs = m_pool.Pop();
+                readEventArgs.Completed += IO_Completed;
+
                 AsyncUserToken userToken = (AsyncUserToken)readEventArgs.UserToken;
                 if (userToken == null)
                 {
@@ -235,11 +227,9 @@ namespace Server
                 userToken.Remote = e.AcceptSocket.RemoteEndPoint;
                 userToken.IPAddress = ((IPEndPoint)(e.AcceptSocket.RemoteEndPoint)).Address;
 
-                lock (m_clients) { m_clients.Add(userToken); }
-
-                if (!e.AcceptSocket.ReceiveAsync(readEventArgs))
+                if (!userToken.Socket.ReceiveAsync(readEventArgs))
                 {
-                    ProcessReceive(readEventArgs);
+                    ProcessReceive(readEventArgs, userToken);
                 }
             }
             catch (Exception ex)
@@ -258,13 +248,13 @@ namespace Server
             switch (e.LastOperation)
             {
                 case SocketAsyncOperation.Receive:
-                    ProcessReceive(e);
+                    var token = (AsyncUserToken)e.UserToken;
+                    ProcessReceive(e, token);
+                    if (token.Socket != null && token.Socket.Connected)
+                        token.Socket.ReceiveAsync(e);
+                    else
+                        CloseClient(token);
                     break;
-                case SocketAsyncOperation.Send:
-                    ProcessSend(e);
-                    break;
-                default:
-                    throw new ArgumentException("在套接字上完成的最后一个操作不是接收或发送");
             }
 
         }
@@ -276,71 +266,69 @@ namespace Server
         /// 如果接收到数据，则将数据回显到客户机。
         /// </summary>
         /// <param name="e"></param>
-        private void ProcessReceive(SocketAsyncEventArgs e)
+        private void ProcessReceive(SocketAsyncEventArgs e, AsyncUserToken currentToken)
         {
             // 检查远程主机是否关闭了连接
-            AsyncUserToken token = (AsyncUserToken)e.UserToken;
             try
             {
                 if (e.BytesTransferred > 0 && e.SocketError == SocketError.Success)
                 {
-                    if (!token.BeginAccept)
-                    {
-                        byte[] lenBytes = new byte[4];
-                        Array.Copy(e.Buffer, e.Offset, lenBytes, 0, 4);
-                        token.PackageLength = BitConverter.ToInt32(lenBytes, 0);
-                        RecieveStart?.BeginInvoke(token.Remote, token.GetHashCode(), token.PackageLength, null, null);
-                    }
-                    token.BeginAccept = true;
 
-                    //读取数据  
-                    byte[] data = new byte[e.BytesTransferred];
-                    Array.Copy(e.Buffer, e.Offset, data, 0, e.BytesTransferred);
-                    lock (token.Buffer)
+                    if (currentToken.GroupId != null)
                     {
-                        token.Buffer.AddRange(data);
+                        var tokens = m_clients[currentToken.GroupId];
+                        foreach (var token in tokens)
+                        {
+                            //if (token == currentToken)
+                            //    continue;
+                            this.SendMessageWithoutHead(token, e.Buffer, e.Offset, e.BytesTransferred);
+                        }
+
+                        return;
+                    }
+
+                    if (currentToken.PackageLength == 0)
+                    {
+                        Array.Copy(e.Buffer, e.Offset, lenBytes, 0, 4);
+                        currentToken.PackageLength = BitConverter.ToInt32(lenBytes, 0);
+                        currentToken.Buffer = new byte[currentToken.PackageLength];
+                        currentToken.CopyOffset = 0;
+
+                        Array.Copy(e.Buffer, e.Offset + 4, currentToken.Buffer, currentToken.CopyOffset, e.BytesTransferred - 4);
+                        currentToken.CopyOffset += e.BytesTransferred - 4;
+                    }
+                    else
+                    {
+                        Array.Copy(e.Buffer, e.Offset, currentToken.Buffer, currentToken.CopyOffset, e.BytesTransferred);
+                        currentToken.CopyOffset += e.BytesTransferred;
                     }
 
                     //判断包的长度  
-                    if (token.PackageLength > token.Buffer.Count - 4)
+                    if (currentToken.PackageLength <= currentToken.Buffer.Length)
                     {
-                        //触发进度更改事件 
-                        RecieveProcess?.BeginInvoke(token.Remote, token.GetHashCode(), token.Buffer.Count * 1.0f / token.PackageLength, null, null);
-                        //长度不够时,退出循环,让程序继续接收  
-                    }
-                    else
-                    {  //包够长时,则提取出来,交给后面的程序去处理  
-                        byte[] rev = token.Buffer.GetRange(4, token.PackageLength).ToArray();
+                        //包够长时,则提取出来,交给后面的程序去处理  
+                        var result = currentToken.Buffer.BeginDeserialize<TransferStructure>();
 
                         //从数据池中移除这组数据  
-                        lock (token.Buffer)
+                        lock (currentToken.Buffer)
                         {
-                            token.Buffer.Clear();
-                            token.PackageLength = 0;
-                            token.BeginAccept = false;
+                            currentToken.Buffer = null;
+                            currentToken.CopyOffset = 0;
+                            currentToken.PackageLength = 0;
                             GC.Collect();
                         }
 
-                        var result = rev.BeginDeserialize<TransferStructure>();
-                        if (result.TransferProtocol != TransferProtocol.GroupId)
+                        if (result.TransferProtocol == TransferProtocol.GroupId)
                         {
-                            //将数据包交给后台处理 
-                            ReceiveClientData?.BeginInvoke(token.GroupId, token.UserId, result, null, null);
-                            RecieveEnd?.BeginInvoke(token.Remote, token.GetHashCode(), null, null);
+                            var groupId = result.Data.ToString();
+                            currentToken.GroupId = groupId;
+
+                            if (!m_clients.ContainsKey(groupId))
+                                m_clients[groupId] = new List<AsyncUserToken>();
+                            m_clients[groupId].Add(currentToken);
                         }
-                        else if (result.TransferProtocol == TransferProtocol.GroupId)
-                        {
-                            var ids = result.Data as string[];
-                            token.GroupId = ids[0];
-                            token.UserId = ids[1];
-                        }
-                        //这里API处理完后,并没有返回结果,当然结果是要返回的,却不是在这里, 这里的代码只管接收.  
-                        //若要返回结果,可在API处理中调用此类对象的SendMessage方法,统一打包发送.不要被微软的示例给迷惑了.  
                     }
 
-                    //继续接收
-                    if (!token.Socket.ReceiveAsync(e))
-                        this.ProcessReceive(e);
                 }
                 else
                 {
@@ -349,37 +337,12 @@ namespace Server
             }
             catch (Exception ex)
             {
-                lock (token.Buffer)
+                lock (currentToken.Buffer)
                 {
-                    token.Buffer.Clear();
-                    token.PackageLength = 0;
-                    token.BeginAccept = false;
+                    currentToken.Buffer = null;
+                    currentToken.PackageLength = 0;
                     GC.Collect();
                 }
-            }
-        }
-
-        /// <summary>
-        /// 此方法在异步发送操作完成时调用。
-        /// 该方法在套接字上发出另一个receive，以读取从客户机发送的任何附加数据
-        /// </summary>
-        /// <param name="e"></param>
-        private void ProcessSend(SocketAsyncEventArgs e)
-        {
-            if (e.SocketError == SocketError.Success)
-            {
-                // 完成将数据回传给客户端
-                AsyncUserToken token = (AsyncUserToken)e.UserToken;
-                // 读取从客户端发送的下一个数据块
-                bool willRaiseEvent = token.Socket.ReceiveAsync(e);
-                if (!willRaiseEvent)
-                {
-                    ProcessReceive(e);
-                }
-            }
-            else
-            {
-                CloseClientSocket(e);
             }
         }
 
@@ -387,10 +350,17 @@ namespace Server
         private void CloseClientSocket(SocketAsyncEventArgs e)
         {
             AsyncUserToken token = e.UserToken as AsyncUserToken;
-            token.Buffer.Clear();
+            token.Buffer = null;
             token.Buffer = null;
             GC.Collect();
-            lock (m_clients) { m_clients.Remove(token); }
+            lock (m_clients)
+            {
+                foreach (var item in m_clients)
+                {
+                    if (item.Value.Contains(token))
+                        item.Value.Remove(token);
+                }
+            }
             //如果有事件,则调用事件,发送客户端数量变化通知  
             // 关闭与客户端关联的套接字
             try
@@ -406,39 +376,18 @@ namespace Server
             m_pool.Push(e);
         }
 
-        public int SendMessage(string groupId, string userId, TransferStructure data)
-        {
-            var buffer = data.BeginSerializable();
-            var tokens = m_clients.Where(p => p.GroupId == groupId );
-            foreach (var token in tokens)
-            {
-                this.SendMessage(token, buffer);
-            }
-            return tokens.Count();
-        }
-
-        /// <summary>  
-        /// 对数据进行打包,然后再发送  
-        /// </summary>  
-        /// <param name="token"></param>  
-        /// <param name="message"></param>  
-        /// <returns></returns>  
-        private void SendMessage(AsyncUserToken token, byte[] message)
+        private void SendMessageWithoutHead(AsyncUserToken token, byte[] message, int offset, int length)
         {
             if (token == null || token.Socket == null || !token.Socket.Connected)
                 return;
             try
             {
-                //对要发送的消息,制定简单协议,头4字节指定包的大小,方便客户端接收(协议可以自己定)  
-                byte[] buff = new byte[message.Length + 4];
-                byte[] len = BitConverter.GetBytes(message.Length);
-                Array.Copy(len, buff, 4);
-                Array.Copy(message, 0, buff, 4, message.Length);
                 //新建异步发送对象, 发送消息  
                 SocketAsyncEventArgs sendArg = new SocketAsyncEventArgs();
                 sendArg.UserToken = token;
-                sendArg.SetBuffer(buff, 0, buff.Length);  //将数据放置进去.  
+                sendArg.SetBuffer(message, offset, length);  //将数据放置进去.  
                 token.Socket.SendAsync(sendArg);
+                GC.Collect();
             }
             catch
             {
